@@ -1,5 +1,6 @@
+import os
 import logging
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, send_file, current_app
 from sqlalchemy import desc, or_
 from app.models import db, BankStatement, CustomerDetails, BankDetails, Transaction, TransactionSchema
 
@@ -197,6 +198,33 @@ def get_statement_metadata(statement_id):
         "status": statement.processing_status,
         "error_message": statement.error_message
     })
+
+
+@statements_bp.route('/statements/<int:statement_id>/file', methods=['GET'])
+def get_statement_file(statement_id):
+    """
+    Serve the original PDF file for a statement
+    """
+    statement = BankStatement.query.get_or_404(statement_id)
+
+    # Build full file path
+    upload_folder = current_app.config['UPLOAD_FOLDER']
+    file_path = os.path.join(upload_folder, statement.filename)
+
+    if not os.path.exists(file_path):
+        logger.error(f"PDF file not found for statement {statement_id}: {file_path}")
+        return jsonify({"error": True, "message": "File not found"}), 404
+
+    try:
+        return send_file(
+            file_path,
+            mimetype='application/pdf',
+            as_attachment=False,  # Display in browser instead of downloading
+            download_name=statement.original_filename
+        )
+    except Exception as e:
+        logger.exception(f"Error serving file for statement {statement_id}: {e}")
+        return jsonify({"error": True, "message": str(e)}), 500
 
 
 @statements_bp.route('/statements/<int:statement_id>/schema', methods=['PUT'])

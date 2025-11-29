@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Trash2, AlertCircle, FileText, Table, Activity } from 'lucide-react';
+import { Trash2, AlertCircle, FileText, Table, Activity, Eye, Download } from 'lucide-react';
 import { statementsApi } from '@/api/statements';
 import TransactionTable from '@/components/TransactionTable';
 import MetadataViewer from '@/components/MetadataViewer';
@@ -227,40 +227,87 @@ export default function StatementDetail() {
                 </Card>
             )}
 
-            {/* Details (only show if completed) */}
-            {statement.status === 'completed' && (
-                <Tabs defaultValue="overview" className="w-full">
-                    <TabsList className="mb-6">
+            {/* Tabs - File viewing available for all, other tabs only for completed */}
+            <Tabs defaultValue={statement.status === 'completed' ? 'overview' : 'file'} className="w-full">
+                <TabsList className="mb-6">
+                    {statement.status === 'completed' && (
                         <TabsTrigger value="overview">
                             <FileText className="h-4 w-4 mr-2" />
                             Overview
                         </TabsTrigger>
-                        <TabsTrigger value="transactions">
-                            <Table className="h-4 w-4 mr-2" />
-                            Transactions
-                        </TabsTrigger>
-                        <TabsTrigger value="metadata">
-                            <Activity className="h-4 w-4 mr-2" />
-                            Metadata & Logs
-                        </TabsTrigger>
-                    </TabsList>
+                    )}
+                    <TabsTrigger value="file">
+                        <Eye className="h-4 w-4 mr-2" />
+                        View PDF
+                    </TabsTrigger>
+                    {statement.status === 'completed' && (
+                        <>
+                            <TabsTrigger value="transactions">
+                                <Table className="h-4 w-4 mr-2" />
+                                Transactions
+                            </TabsTrigger>
+                            <TabsTrigger value="metadata">
+                                <Activity className="h-4 w-4 mr-2" />
+                                Metadata & Logs
+                            </TabsTrigger>
+                        </>
+                    )}
+                </TabsList>
 
+                {statement.status === 'completed' && (
                     <TabsContent value="overview">
                         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                             {renderInfoCard('Customer Details', statement.customer_details)}
                             {renderInfoCard('Bank Details', statement.bank_details)}
                         </div>
                     </TabsContent>
+                )}
 
-                    <TabsContent value="transactions">
-                        {id && <TransactionTable statementId={parseInt(id)} />}
-                    </TabsContent>
+                <TabsContent value="file">
+                    <Card>
+                        <CardHeader>
+                            <div className="flex items-center justify-between">
+                                <CardTitle>Original PDF Statement</CardTitle>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                        const fileUrl = statementsApi.getFileUrl(statement.id);
+                                        const link = document.createElement('a');
+                                        link.href = fileUrl;
+                                        link.download = statement.filename;
+                                        link.click();
+                                    }}
+                                >
+                                    <Download className="h-4 w-4 mr-2" />
+                                    Download
+                                </Button>
+                            </div>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="w-full border rounded-lg overflow-hidden bg-gray-50">
+                                <iframe
+                                    src={statementsApi.getFileUrl(statement.id)}
+                                    className="w-full h-[800px] border-0"
+                                    title="PDF Viewer"
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
+                </TabsContent>
 
-                    <TabsContent value="metadata">
-                        {id && <MetadataViewer statementId={parseInt(id)} />}
-                    </TabsContent>
-                </Tabs>
-            )}
+                {statement.status === 'completed' && (
+                    <>
+                        <TabsContent value="transactions">
+                            {id && <TransactionTable statementId={parseInt(id)} />}
+                        </TabsContent>
+
+                        <TabsContent value="metadata">
+                            {id && <MetadataViewer statementId={parseInt(id)} />}
+                        </TabsContent>
+                    </>
+                )}
+            </Tabs>
         </div>
     );
 }
