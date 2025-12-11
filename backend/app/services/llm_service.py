@@ -5,6 +5,7 @@ import asyncio
 from typing import Dict, Optional, List, Any
 import httpx
 from pydantic import BaseModel, Field, ValidationError
+from openai import OpenAI, AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,8 @@ class BankStatementExtraction(BaseModel):
 
 class GroqCloudService:
     """
-    Responsible for sending images to GroqCloud vision model and extracting structured data
+    Responsible for sending images to local vLLM (olmOCR) and extracting structured data.
+    Uses OpenAI-compatible API for vLLM integration.
     """
 
     SYSTEM_PROMPT = """You are an expert financial document analysis assistant specialized in bank statement data extraction. Your core responsibilities:
@@ -177,20 +179,31 @@ Example 3 - Bangladesh Bank Statement with Taka currency:
 }"""
 
     def __init__(self, config):
-        self.api_key = config['GROQ_API_KEY']
-        self.model = config['GROQ_MODEL']
-        self.max_tokens = config['GROQ_MAX_TOKENS']
-        self.timeout = config['GROQ_TIMEOUT']
-        self.retry_attempts = config['RETRY_ATTEMPTS']
-        self.retry_delay = config['RETRY_DELAY']
-        self.base_url = "https://api.groq.com/openai/v1/chat/completions"
+        self.base_url = config.get('VLLM_BASE_URL', 'http://10.150.60.20:8000/v1')
+        self.api_key = config.get('VLLM_API_KEY', 'dummy')
+        self.model = config.get('VLLM_MODEL', 'olmOcr-7B-FP8')
+        self.max_tokens = config.get('VLLM_MAX_TOKENS', 4000)
+        self.timeout = config.get('VLLM_TIMEOUT', 120)
+        self.retry_attempts = config.get('RETRY_ATTEMPTS', 3)
+        self.retry_delay = config.get('RETRY_DELAY', 2)
+        
+        # Initialize OpenAI client for vLLM (OpenAI-compatible API)
+        self.client = OpenAI(
+            base_url=self.base_url,
+            api_key=self.api_key
+        )
+        self.async_client = AsyncOpenAI(
+            base_url=self.base_url,
+            api_key=self.api_key
+        )
+        
         self.total_tokens_used = 0
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
 
     async def extract_from_image_async(self, image_path: str, page_number: int) -> Dict:
         """
-        Send image to Groq and extract structured data (async version)
+        Send image to local vLLM (olmOCR) and extract structured data (async version)
 
         Args:
             image_path: Path to the image file
@@ -327,32 +340,41 @@ Example 3 - Bangladesh Bank Statement with Taka currency:
         ]
 
     async def _call_api_with_retry_async(self, messages: list, page_number: int) -> Dict:
-        """Call API with exponential backoff retry (async version)"""
+        """Call local vLLM API with exponential backoff retry (async version)"""
         last_error = None
 
         for attempt in range(self.retry_attempts):
             try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.post(
-                        self.base_url,
-                        headers={
-                            "Authorization": f"Bearer {self.api_key}",
-                            "Content-Type": "application/json"
-                        },
-                        json={
-                            "model": self.model,
-                            "messages": messages,
-                            "max_tokens": self.max_tokens,
-                            "temperature": 0.1  # Low temperature for more deterministic output
+                # Use OpenAI async client for vLLM
+                response = await self.async_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    max_tokens=self.max_tokens,
+                    temperature=0.1  # Low temperature for more deterministic output
+                )
+                
+                # Convert response to dict format compatible with existing code
+                return {
+                    'choices': [
+                        {
+                            'message': {
+                                'content': response.choices[0].message.content
+                            }
                         }
-                    )
+                    ],
+                    'usage': {
+                        'prompt_tokens': response.usage.prompt_tokens if response.usage else 0,
+                        'completion_tokens': response.usage.completion_tokens if response.usage else 0,
+                        'total_tokens': response.usage.total_tokens if response.usage else 0
+                    }
+                }
 
-                    response.raise_for_status()
-                    return response.json()
-
-            except httpx.HTTPStatusError as e:
+            except Exception as e:
                 last_error = e
-                if e.response.status_code == 429:  # Rate limit
+                error_str = str(e).lower()
+                
+                # Check for rate limiting or server errors
+                if 'rate' in error_str or '429' in error_str:
                     wait_time = self.retry_delay * (2 ** attempt)
                     logger.warning(
                         f"Page {page_number}: Rate limited, waiting {wait_time}s "
@@ -360,7 +382,7 @@ Example 3 - Bangladesh Bank Statement with Taka currency:
                     )
                     await asyncio.sleep(wait_time)
                     continue
-                elif e.response.status_code >= 500:  # Server error
+                elif '500' in error_str or '502' in error_str or '503' in error_str:
                     wait_time = self.retry_delay * (2 ** attempt)
                     logger.warning(
                         f"Page {page_number}: Server error, waiting {wait_time}s "
@@ -368,23 +390,18 @@ Example 3 - Bangladesh Bank Statement with Taka currency:
                     )
                     await asyncio.sleep(wait_time)
                     continue
-                else:
-                    logger.error(
-                        f"Page {page_number}: HTTP error: {e.response.status_code} - {e.response.text}"
-                    )
+                elif 'timeout' in error_str:
+                    logger.warning(f"Page {page_number}: Timeout, retry {attempt + 1}/{self.retry_attempts}")
+                    if attempt < self.retry_attempts - 1:
+                        await asyncio.sleep(self.retry_delay)
+                        continue
                     raise
-
-            except httpx.TimeoutException as e:
-                last_error = e
-                logger.warning(f"Page {page_number}: Timeout, retry {attempt + 1}/{self.retry_attempts}")
-                if attempt < self.retry_attempts - 1:
-                    await asyncio.sleep(self.retry_delay)
-                    continue
-                raise
-
-            except Exception as e:
-                logger.exception(f"Page {page_number}: Unexpected error calling Groq API: {e}")
-                raise
+                else:
+                    logger.exception(f"Page {page_number}: Unexpected error calling vLLM API: {e}")
+                    if attempt < self.retry_attempts - 1:
+                        await asyncio.sleep(self.retry_delay)
+                        continue
+                    raise
 
         # If we exhausted all retries
         raise Exception(

@@ -22,11 +22,12 @@ class Config:
     IMAGE_FORMAT = 'PNG'
     MAX_PAGES = 100  # Safety limit
 
-    # GroqCloud settings
-    GROQ_API_KEY = os.environ.get('GROQ_API_KEY')
-    GROQ_MODEL = os.environ.get('GROQ_MODEL', 'llama-3.2-90b-vision-preview')
-    GROQ_MAX_TOKENS = 8192  # Increased for long transaction lists
-    GROQ_TIMEOUT = 120  # seconds - increased for complex pages
+    # Local vLLM settings (olmOCR)
+    VLLM_BASE_URL = os.environ.get('VLLM_BASE_URL', 'http://10.150.60.20:8000/v1')
+    VLLM_MODEL = os.environ.get('VLLM_MODEL', 'olmOcr-7B-FP8')
+    VLLM_API_KEY = os.environ.get('VLLM_API_KEY', 'dummy')  # vLLM typically doesn't require auth
+    VLLM_MAX_TOKENS = int(os.environ.get('VLLM_MAX_TOKENS', '4000'))  # Max tokens for response
+    VLLM_TIMEOUT = int(os.environ.get('VLLM_TIMEOUT', '120'))  # seconds - increased for complex pages
 
     # Processing settings
     CLEANUP_TEMP_FILES = os.environ.get('CLEANUP_TEMP_FILES', 'true').lower() == 'true'
